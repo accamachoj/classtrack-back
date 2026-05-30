@@ -21,9 +21,21 @@ if [ "$CONFIRM" != "eliminar" ]; then
   exit 0
 fi
 
+# Eliminar snapshots de RDS (evitar costos residuales)
+echo ""
+echo "[1/4] Eliminando snapshots de RDS..."
+aws rds describe-db-snapshots \
+  --region "$AWS_REGION" \
+  --query "DBSnapshots[?DBInstanceIdentifier=='classtrack-db'].DBSnapshotIdentifier" \
+  --output text | \
+  xargs -I {} aws rds delete-db-snapshot \
+    --db-snapshot-identifier {} \
+    --region "$AWS_REGION" \
+    2>/dev/null || echo "      No habia snapshots de RDS."
+
 # Vaciar ECR antes de eliminar el stack (CloudFormation no puede eliminar repos con imagenes)
 echo ""
-echo "[1/3] Eliminando imagenes de ECR..."
+echo "[2/4] Eliminando imagenes de ECR..."
 aws ecr batch-delete-image \
   --repository-name classtrack-api \
   --region "$AWS_REGION" \
@@ -32,7 +44,7 @@ aws ecr batch-delete-image \
 
 # Eliminar stack de aplicacion
 echo ""
-echo "[2/3] Eliminando stack classtrack-app..."
+echo "[3/4] Eliminando stack classtrack-app..."
 aws cloudformation delete-stack \
   --stack-name classtrack-app \
   --region "$AWS_REGION"
@@ -45,7 +57,7 @@ echo "      Stack classtrack-app eliminado."
 
 # Eliminar stack de infraestructura
 echo ""
-echo "[3/3] Eliminando stack classtrack-infra..."
+echo "[4/4] Eliminando stack classtrack-infra..."
 aws cloudformation delete-stack \
   --stack-name classtrack-infra \
   --region "$AWS_REGION"
