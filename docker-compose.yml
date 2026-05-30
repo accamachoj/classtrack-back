@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: classtrack-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-classtrack}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/main/resources/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-classtrack}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: classtrack-api
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-classtrack}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      JWT_SECRET: ${JWT_SECRET:-classtrack-secret-key-must-be-at-least-256-bits-long-for-hs256}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-86400000}
+      SESSION_DURATION_MINUTES: ${SESSION_DURATION_MINUTES:-15}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
