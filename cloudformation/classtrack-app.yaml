@@ -107,7 +107,7 @@ Resources:
             Interval: 30
             Timeout: 10
             Retries: 3
-            StartPeriod: 60
+            StartPeriod: 180
 
   # ── ECS SERVICE ─────────────────────────────────────────────────────────────
   ECSService:
