@@ -1,0 +1,262 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ClassTrack - Infraestructura base.
+  Crea: VPC, subnets, security groups, ECR, RDS PostgreSQL (free tier), IAM roles, CloudWatch Logs.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARAMETROS
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    Description: "Contraseña para el usuario postgres de RDS (min 8 caracteres)"
+
+  AdminCidr:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: >
+      CIDR desde donde se permitira acceso a RDS puerto 5432 para ejecutar schema.sql.
+      Recomendado: usa tu IP publica (ej: 190.x.x.x/32) en lugar de 0.0.0.0/0.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RECURSOS
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── VPC ────────────────────────────────────────────────────────────────────
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: classtrack-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: classtrack-igw
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ── SUBNETS PUBLICAS ────────────────────────────────────────────────────────
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: classtrack-subnet-public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: classtrack-subnet-public-2
+
+  # ── ROUTING ────────────────────────────────────────────────────────────────
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: classtrack-rt-public
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  Subnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ── SECURITY GROUPS ─────────────────────────────────────────────────────────
+
+  # SG para ECS Fargate - permite trafico HTTP en 8080
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: classtrack-ecs-sg
+      GroupDescription: Permite trafico HTTP en puerto 8080 hacia las tareas ECS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: API REST desde internet
+      Tags:
+        - Key: Name
+          Value: classtrack-ecs-sg
+
+  # SG para RDS - permite trafico desde ECS y desde admin para schema.sql
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: classtrack-rds-sg
+      GroupDescription: Permite acceso PostgreSQL desde ECS y desde admin
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: Acceso desde ECS Fargate
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref AdminCidr
+          Description: Acceso admin para ejecutar schema.sql
+      Tags:
+        - Key: Name
+          Value: classtrack-rds-sg
+
+  # ── ECR REPOSITORY ──────────────────────────────────────────────────────────
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: classtrack-api
+      ImageScanningConfiguration:
+        ScanOnPush: false
+      Tags:
+        - Key: Name
+          Value: classtrack-api
+
+  # ── RDS POSTGRESQL (FREE TIER) ──────────────────────────────────────────────
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: classtrack-db-subnet-group
+      DBSubnetGroupDescription: Subnet group para ClassTrack RDS
+      SubnetIds:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: classtrack-db
+      DBInstanceClass: db.t3.micro          # Free tier
+      Engine: postgres
+      EngineVersion: '16'
+      MasterUsername: postgres
+      MasterUserPassword: !Ref DBPassword
+      DBName: classtrack
+      AllocatedStorage: '20'               # Free tier: hasta 20 GB
+      StorageType: gp2
+      MultiAZ: false                        # Free tier: single-AZ
+      PubliclyAccessible: true             # Necesario para ejecutar schema.sql
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      BackupRetentionPeriod: 0             # Sin backups automaticos (free tier)
+      DeletionProtection: false
+      Tags:
+        - Key: Name
+          Value: classtrack-db
+
+  # ── IAM ROLE PARA ECS ───────────────────────────────────────────────────────
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: classtrack-ecs-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: Name
+          Value: classtrack-ecs-execution-role
+
+  # ── CLOUDWATCH LOG GROUP ────────────────────────────────────────────────────
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/classtrack
+      RetentionInDays: 7
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS - usados por classtrack-app.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  ECRRepositoryUri:
+    Description: URI del repositorio ECR para hacer push de la imagen Docker
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Export:
+      Name: classtrack-ECRRepositoryUri
+
+  RDSEndpoint:
+    Description: Endpoint de conexion a RDS PostgreSQL
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Export:
+      Name: classtrack-RDSEndpoint
+
+  ECSTaskExecutionRoleArn:
+    Description: ARN del rol de ejecucion de ECS
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+    Export:
+      Name: classtrack-ECSTaskExecutionRoleArn
+
+  ECSSecurityGroupId:
+    Description: ID del Security Group de ECS
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: classtrack-ECSSecurityGroupId
+
+  PublicSubnet1Id:
+    Description: ID de la Subnet Publica 1
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: classtrack-PublicSubnet1Id
+
+  PublicSubnet2Id:
+    Description: ID de la Subnet Publica 2
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: classtrack-PublicSubnet2Id
+
+  VPCId:
+    Description: ID de la VPC
+    Value: !Ref VPC
+    Export:
+      Name: classtrack-VPCId

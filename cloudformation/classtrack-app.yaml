@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ClassTrack - Stack de aplicacion.
+  Crea: ECS Cluster, Task Definition, ECS Service Fargate.
+  PREREQUISITO: classtrack-infra stack desplegado e imagen Docker subida a ECR.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARAMETROS
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+
+  ImageUri:
+    Type: String
+    Description: >
+      URI completa de la imagen en ECR.
+      Ejemplo: 123456789012.dkr.ecr.us-east-1.amazonaws.com/classtrack-api:latest
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: "Misma contraseña usada en classtrack-infra stack"
+
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Default: "classtrack-secret-key-must-be-at-least-256-bits-long-for-hs256"
+    Description: "Clave secreta para firmar JWT (minimo 32 caracteres)"
+
+  JwtExpiration:
+    Type: String
+    Default: "86400000"
+    Description: "Duracion del JWT en milisegundos (86400000 = 24 horas)"
+
+  SessionDurationMinutes:
+    Type: String
+    Default: "15"
+    Description: "Duracion del QR de asistencia en minutos"
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 2
+    Description: "Numero de tareas Fargate a ejecutar (1 para free tier)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RECURSOS
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── ECS CLUSTER ─────────────────────────────────────────────────────────────
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: classtrack-cluster
+      Tags:
+        - Key: Name
+          Value: classtrack-cluster
+
+  # ── TASK DEFINITION ─────────────────────────────────────────────────────────
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: classtrack-task
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'       # 0.25 vCPU - minimo Fargate
+      Memory: '512'    # 0.5 GB   - minimo Fargate
+      ExecutionRoleArn:
+        Fn::ImportValue: classtrack-ECSTaskExecutionRoleArn
+      ContainerDefinitions:
+        - Name: classtrack-api
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: DB_HOST
+              Value:
+                Fn::ImportValue: classtrack-RDSEndpoint
+            - Name: DB_PORT
+              Value: '5432'
+            - Name: DB_NAME
+              Value: classtrack
+            - Name: DB_USER
+              Value: postgres
+            - Name: DB_PASSWORD
+              Value: !Ref DBPassword
+            - Name: JWT_SECRET
+              Value: !Ref JwtSecret
+            - Name: JWT_EXPIRATION
+              Value: !Ref JwtExpiration
+            - Name: SESSION_DURATION_MINUTES
+              Value: !Ref SessionDurationMinutes
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/classtrack
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - "curl -f http://localhost:8080/v3/api-docs > /dev/null 2>&1 || exit 1"
+            Interval: 30
+            Timeout: 10
+            Retries: 3
+            StartPeriod: 60
+
+  # ── ECS SERVICE ─────────────────────────────────────────────────────────────
+  ECSService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: classtrack-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - Fn::ImportValue: classtrack-ECSSecurityGroupId
+          Subnets:
+            - Fn::ImportValue: classtrack-PublicSubnet1Id
+            - Fn::ImportValue: classtrack-PublicSubnet2Id
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      Tags:
+        - Key: Name
+          Value: classtrack-service
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  ECSClusterName:
+    Description: Nombre del cluster ECS
+    Value: !Ref ECSCluster
+
+  ECSServiceName:
+    Description: Nombre del servicio ECS
+    Value: !GetAtt ECSService.Name
+
+  SwaggerUrl:
+    Description: >
+      URL de Swagger UI. Reemplaza <PUBLIC_IP> con la IP publica de la tarea ECS.
+      Para obtener la IP: AWS Console -> ECS -> classtrack-cluster -> Tasks -> click en la tarea -> Public IP
+    Value: "http://<PUBLIC_IP>:8080/swagger-ui.html"
