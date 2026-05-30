@@ -8,8 +8,8 @@ setlocal EnableDelayedExpansion
 
 REM ── CONFIGURACION ─────────────────────────────────────────────────────────
 set AWS_REGION=us-east-1
-set DB_PASSWORD=           REM <-- completar antes de ejecutar
-set ADMIN_CIDR=0.0.0.0/0  REM <-- reemplazar con tu IP: 190.x.x.x/32
+set DB_PASSWORD=postgres
+set ADMIN_CIDR=54.144.54.234/32
 set PROJECT_ROOT=%~dp0..
 
 echo =============================================
