@@ -512,6 +512,60 @@ Estudiante puede consultar todas sus asistencias registradas con detalle de curs
 
 ---
 
+---
+
+## Fase 14 — Cierre de Sesión (Logout)
+
+**Duración estimada:** 1 hora
+
+### Análisis
+
+JWT es stateless por diseño — el servidor no guarda sesiones. Esto significa que invalidar un token requiere una estrategia explícita en el backend. Sin ella, un token sigue siendo válido hasta su expiración (24h) incluso después de que el usuario cierre sesión.
+
+### Estrategia elegida — Token Blacklist en memoria
+
+Para un proyecto académico de instancia única, se usa un `HashSet<String>` en memoria que almacena los tokens invalidados. El `JwtAuthenticationFilter` verifica contra esta lista en cada request.
+
+**Limitación conocida:** Si la aplicación se reinicia, la blacklist se pierde. Los tokens previamente invalidados volverán a ser válidos hasta su expiración. Aceptable para alcance académico.
+
+### Componentes
+
+| Componente | Tipo | Responsabilidad |
+|-----------|------|----------------|
+| `TokenBlacklistService` | `@Service` — `security/` | Almacena y consulta tokens invalidados |
+| `AuthController` | Modificación | Agregar `POST /auth/logout` |
+| `JwtAuthenticationFilter` | Modificación | Verificar blacklist antes de autenticar |
+
+### Endpoint
+
+| Método | Ruta | Propósito | Auth | Rol |
+|--------|------|----------|------|-----|
+| POST | `/api/v1/auth/logout` | Invalidar el token JWT actual | Sí | Ambos |
+
+### Request
+
+Sin body — el token se extrae del header `Authorization: Bearer <token>`.
+
+### Response
+
+```json
+{ "success": true, "message": "Logged out successfully" }
+```
+
+### Lógica
+
+1. `AuthController.logout()` extrae el token del header `Authorization`
+2. Llama a `TokenBlacklistService.invalidate(token)`
+3. El token queda almacenado en el `HashSet`
+4. En cada request subsiguiente, `JwtAuthenticationFilter` consulta `TokenBlacklistService.isBlacklisted(token)`
+5. Si está en la blacklist → retorna 401 sin procesar el request
+
+### Entregable
+- `POST /api/v1/auth/logout` retorna 200 y el token queda inválido inmediatamente
+- Requests posteriores con el mismo token retornan 401
+
+---
+
 ## Resumen de Fases
 
 | Fase | Módulo | Endpoints | Horas Est. | Estado |
@@ -527,10 +581,11 @@ Estudiante puede consultar todas sus asistencias registradas con detalle de curs
 | 8 | Attendance Check-in | 2 | 2h | ✅ Completado |
 | 9 | Reports | 3 | 2h | ✅ Completado |
 | 10 | Swagger | 0 | 1h | ✅ Completado |
-| 11 | Docker + Railway | 0 | 1-2h | ⬜ Pendiente |
-| 12 | Correcciones ambiguedades (QR 15min + GPS) | 0 | 1h | ⬜ Pendiente |
-| 13 | Historial asistencia estudiante | 1 | 1h | ⬜ Pendiente |
-| **Total** | | **20 endpoints** | **~23-29h** | |
+| 11 | Docker + Railway | 0 | 1-2h | ✅ Completado |
+| 12 | Correcciones ambiguedades (QR 15min + GPS) | 0 | 1h | ✅ Completado |
+| 13 | Historial asistencia estudiante | 1 | 1h | ✅ Completado |
+| 14 | Logout (token blacklist) | 1 | 1h | ⬜ Pendiente |
+| **Total** | | **22 endpoints** | **~24-30h** | |
 
 ---
 
